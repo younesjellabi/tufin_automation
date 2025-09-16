@@ -11,7 +11,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO
 from tufin_client import SecureTrackClient, SecureTrackClientError
 
 from securetrack.log_analysis import run_log_analysis
-from securetrack.rule_audit import run_rule_audit
+from securetrack.rule_audit import (
+    Finding,
+    run_rule_audit,
+    to_csv as audit_to_csv,
+    to_json as audit_to_json,
+)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -183,10 +188,14 @@ def _output_result(data: Any, fmt: str, path: Optional[Path]) -> None:
 
     try:
         if fmt == "json":
-            json.dump(data, stream, indent=2)
+            payload = audit_to_json(data) if _is_finding_sequence(data) else data
+            json.dump(payload, stream, indent=2)
             stream.write("\n")
         elif fmt == "csv":
-            _write_csv(data, stream)
+            if _is_finding_sequence(data):
+                audit_to_csv(data, stream)
+            else:
+                _write_csv(data, stream)
         elif fmt == "text":
             _write_text(data, stream)
         else:  # pragma: no cover - safeguarded by argparse choices
@@ -209,6 +218,14 @@ def _write_csv(data: Any, stream: TextIO) -> None:
         "CSV output supports only dictionaries or lists of dictionaries. "
         "Please use JSON output for nested data structures."
     )
+
+
+def _is_finding_sequence(data: Any) -> bool:
+    """Return ``True`` when *data* is a list of rule-audit findings."""
+
+    if isinstance(data, list):
+        return all(isinstance(item, Finding) for item in data)
+    return False
 
 
 def _write_csv_from_dict(row: Dict[str, Any], stream: TextIO) -> None:
@@ -265,6 +282,15 @@ def _format_text_summary(data: Any) -> List[str]:
         return ["No data returned."]
 
     if isinstance(data, list):
+        if _is_finding_sequence(data):
+            lines = [f"Findings: {len(data)}"]
+            preview = data[:5]
+            for finding in preview:
+                lines.append(_summarize_finding(finding))
+            if len(data) > len(preview):
+                lines.append("… output truncated; consider JSON for full details …")
+            return lines
+
         lines = [f"Items returned: {len(data)}"]
         preview = data[:5]
         for item in preview:
@@ -286,6 +312,16 @@ def _summarize_item(item: Any) -> str:
         parts = [f"{key}={value}" for key, value in list(item.items())[:5]]
         return "- " + ", ".join(parts)
     return f"- {item}"
+
+
+def _summarize_finding(finding: Finding) -> str:
+    """Summarize a rule audit finding for text output."""
+
+    device = f" on {finding.device}" if finding.device else ""
+    return (
+        f"- [{finding.issue}] rule {finding.rule_id}{device}: "
+        f"{finding.detail}"
+    )
 
 
 def _summarize_dict(data: Dict[str, Any]) -> str:

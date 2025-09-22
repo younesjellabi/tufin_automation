@@ -4,9 +4,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None  # type: ignore
+
+if load_dotenv:
+    load_dotenv()
 
 from tufin_client import SecureTrackClient, SecureTrackClientError
 
@@ -25,9 +34,28 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="CLI utilities for interacting with Tufin SecureTrack.",
     )
-    parser.add_argument("--server", required=True, help="SecureTrack server URL")
-    parser.add_argument("--user", required=True, help="Username for authentication")
-    parser.add_argument("--password", required=True, help="Password for authentication")
+    default_server = os.getenv("SECURETRACK_SERVER")
+    default_user = os.getenv("SECURETRACK_USER")
+    default_password = os.getenv("SECURETRACK_PASSWORD")
+
+    parser.add_argument(
+        "--server",
+        default=default_server,
+        required=default_server is None,
+        help="SecureTrack server URL (or set SECURETRACK_SERVER in the environment)",
+    )
+    parser.add_argument(
+        "--user",
+        default=default_user,
+        required=default_user is None,
+        help="Username for authentication (or SECURETRACK_USER)",
+    )
+    parser.add_argument(
+        "--password",
+        default=default_password,
+        required=default_password is None,
+        help="Password for authentication (or SECURETRACK_PASSWORD)",
+    )
     parser.add_argument(
         "--insecure",
         action="store_true",
@@ -39,6 +67,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=30,
         help="Timeout for HTTP requests in seconds",
     )
+    parser.add_argument(
+        "--no-sdk",
+        action="store_true",
+        help="Disable use of the pytos2 SDK and rely solely on REST endpoints",
+    )
+
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -46,6 +80,7 @@ def create_parser() -> argparse.ArgumentParser:
     _add_log_analysis_parser(subparsers)
     _add_connectivity_parser(subparsers)
     _add_path_lookup_parser(subparsers)
+    _add_health_check_parser(subparsers)
 
     return parser
 
@@ -116,6 +151,20 @@ def _add_path_lookup_parser(
     parser.set_defaults(handler=_handle_path_lookup)
 
 
+
+def _add_health_check_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register the health-check subcommand."""
+
+    parser = subparsers.add_parser(
+        "health-check",
+        help="Validate credentials and reachability for SecureTrack",
+    )
+    _add_output_arguments(parser, {"json", "text"})
+    parser.set_defaults(handler=_handle_health_check)
+
+
 def _add_output_arguments(
     parser: argparse.ArgumentParser, choices: Iterable[str]
 ) -> None:
@@ -172,6 +221,12 @@ def _handle_path_lookup(client: SecureTrackClient, args: argparse.Namespace) -> 
     """Trigger a path lookup via the SecureTrack client."""
 
     return client.path_lookup(args.src, args.dst, service=args.service)
+
+
+def _handle_health_check(client: SecureTrackClient, args: argparse.Namespace) -> Any:
+    """Run a connectivity check against SecureTrack."""
+
+    return client.check_connection()
 
 
 def _output_result(data: Any, fmt: str, path: Optional[Path]) -> None:
@@ -344,6 +399,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         password=args.password,
         timeout=args.timeout,
         verify=not args.insecure,
+        use_sdk=not args.no_sdk,
     )
 
     handler = getattr(args, "handler", None)
